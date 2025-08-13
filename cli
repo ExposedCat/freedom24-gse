@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NAME="notification-configurator"
+NAME="panel-stocks"
 DOMAIN="exposedcat"
 
 SLUG="$NAME@$DOMAIN"

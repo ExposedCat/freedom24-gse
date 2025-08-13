@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.exposedcat.panel-stocks" path="/org/gnome/shell/extensions/panel-stocks/">
+    <key name="tickers" type="as">
+      <default>[]</default>
+      <summary>Stock tickers</summary>
+      <description>List of stock ticker symbols to display in the panel.</description>
+    </key>
+  </schema>
+  
+</schemalist>
+
+

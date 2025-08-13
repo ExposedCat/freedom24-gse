@@ -1,6 +1,6 @@
 {
-	"name": "gnome-shell-extension",
-	"description": "GNOME Shell extension",
+	"name": "panel-stocks-gse",
+	"description": "Panel Stocks for GNOME Shell",
 	"version": "1.0.0",
 	"keywords": [],
 	"scripts": {
@@ -15,22 +15,24 @@
 	"license": "LGPL-3.0-or-later",
 	"devDependencies": {
 		"@girs/gda-5.0": "^5.0.0-4.0.0-beta.14",
+		"@girs/adw-1": "^1.0.0-4.0.0-beta.14",
 		"@types/node": "^22.4.0",
 		"typescript": "^5.5.3"
 	},
 	"type": "module",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/ExposedCat/gnome-shell-extension.git"
+		"url": "git+https://github.com/ExposedCat/panel-stocks-gse.git"
 	},
 	"bugs": {
-		"url": "https://github.com/ExposedCat/gnome-shell-extension/issues"
+		"url": "https://github.com/ExposedCat/panel-stocks-gse/issues"
 	},
-	"homepage": "https://github.com/ExposedCat/gnome-shell-extension#readme",
+	"homepage": "https://github.com/ExposedCat/panel-stocks-gse#readme",
 	"sideEffects": false,
 	"dependencies": {
 		"@biomejs/biome": "^1.9.4",
 		"@girs/gjs": "^4.0.0-beta.7",
 		"@girs/gnome-shell": "^46.0.1"
-	}
+	},
+	"packageManager": "pnpm@8.14.2+sha1.1670a65b60df5f95e9f0cb7de46e605d9bd74fda"
 }

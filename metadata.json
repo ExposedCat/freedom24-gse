@@ -1,8 +1,8 @@
 {
-	"name": "Gnome Shell Extension",
-	"description": "GNOME Shell extension",
-	"uuid": "gnome-extension-template@exposedcat",
-	"settings-schema": "org.gnome.shell.extensions.extension",
+	"name": "Panel Stocks",
+	"description": "Panel Stocks for GNOME Shell",
+	"uuid": "panel-stocks@exposedcat",
+	"settings-schema": "org.gnome.shell.extensions.exposedcat.panel-stocks",
 	"shell-version": [
 		"47"
 	]
