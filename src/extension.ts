@@ -6,13 +6,7 @@ import Clutter from "gi://Clutter";
 import GLib from "gi://GLib";
 import type Gio from "gi://Gio";
 import { TradenetWebSocket } from "./websocket.js";
-import { TickerDatabase } from "./database.js";
-
-type StockData = {
-	symbol: string;
-	price: number;
-	isRealtime: boolean;
-};
+import { TickerDatabase, type PriceTrend } from "./database.js";
 
 export default class GnomeShellExtension extends Extension {
 	private _panelButton: PanelMenu.Button | null = null;
@@ -23,11 +17,14 @@ export default class GnomeShellExtension extends Extension {
 	private _passwordChangedId: number | null = null;
 	private _tickerPrices = new Map<
 		string,
-		{ price: number; isRealtime: boolean }
+		{ price: number; isRealtime: boolean; trend: PriceTrend }
 	>();
 	private _isConnected = false;
 	private _reconnectTimeoutId: number | null = null;
 	private _reconnectDebounceMs = 1000;
+	private _persistTimeoutId: number | null = null;
+	private _persistDebounceMs = 3000;
+	private _pendingPersist = new Set<string>();
 
 	enable() {
 		this._settings = this.getSettings();
@@ -62,14 +59,12 @@ export default class GnomeShellExtension extends Extension {
 			},
 		);
 
-		// Set up WebSocket price update callback
 		TradenetWebSocket.addPriceUpdateCallback(
 			(ticker: string, price: number) => {
 				this._onPriceUpdate(ticker, price);
 			},
 		);
 
-		// Initialize database and then connect
 		this._initializeAsync();
 	}
 
@@ -94,6 +89,11 @@ export default class GnomeShellExtension extends Extension {
 			this._reconnectTimeoutId = null;
 		}
 
+		if (this._persistTimeoutId) {
+			GLib.source_remove(this._persistTimeoutId);
+			this._persistTimeoutId = null;
+		}
+
 		TradenetWebSocket.disconnect();
 		TickerDatabase.cleanupGlobal();
 
@@ -109,13 +109,10 @@ export default class GnomeShellExtension extends Extension {
 	}
 
 	private async _initializeAsync() {
-		// Initialize database first
 		await TickerDatabase.initializeGlobal();
 
-		// Load historical data for current tickers
 		await this._loadHistoricalData();
 
-		// Connect to WebSocket
 		this._connectWebSocket();
 	}
 
@@ -132,6 +129,7 @@ export default class GnomeShellExtension extends Extension {
 				this._tickerPrices.set(ticker, {
 					price: data.price,
 					isRealtime: data.isRealtime,
+					trend: data.trend,
 				});
 			}
 			this._updateDisplay();
@@ -141,12 +139,10 @@ export default class GnomeShellExtension extends Extension {
 	}
 
 	private _debouncedReconnect() {
-		// Clear existing timeout
 		if (this._reconnectTimeoutId) {
 			GLib.source_remove(this._reconnectTimeoutId);
 		}
 
-		// Set new timeout for debounced reconnection
 		this._reconnectTimeoutId = GLib.timeout_add(
 			GLib.PRIORITY_DEFAULT,
 			this._reconnectDebounceMs,
@@ -175,9 +171,7 @@ export default class GnomeShellExtension extends Extension {
 				login,
 				password,
 			);
-			if (this._isConnected) {
-				this._updateSubscriptions();
-			}
+			if (this._isConnected) this._updateSubscriptions();
 			this._updateDisplay();
 		} catch (error) {
 			console.error("[Extension] WebSocket connection failed:", error);
@@ -192,13 +186,49 @@ export default class GnomeShellExtension extends Extension {
 		const tickers = this._settings.get_strv("tickers");
 		TradenetWebSocket.subscribeToTickers(tickers);
 
-		// Load historical data for any new tickers
 		this._loadHistoricalData();
 	}
 
 	private _onPriceUpdate(ticker: string, price: number) {
-		this._tickerPrices.set(ticker, { price, isRealtime: true });
+		const previous = this._tickerPrices.get(ticker);
+		let trend: PriceTrend = "same";
+		if (previous) {
+			if (price > previous.price) trend = "up";
+			else if (price < previous.price) trend = "down";
+		}
+		this._tickerPrices.set(ticker, { price, isRealtime: true, trend });
 		this._updateDisplay();
+
+		this._pendingPersist.add(ticker);
+		this._schedulePersist();
+	}
+
+	private _schedulePersist() {
+		if (this._persistTimeoutId) {
+			GLib.source_remove(this._persistTimeoutId);
+		}
+		this._persistTimeoutId = GLib.timeout_add(
+			GLib.PRIORITY_DEFAULT,
+			this._persistDebounceMs,
+			() => {
+				this._flushPersist();
+				this._persistTimeoutId = null;
+				return GLib.SOURCE_REMOVE;
+			},
+		);
+	}
+
+	private async _flushPersist() {
+		const tickersToSave = Array.from(this._pendingPersist);
+		this._pendingPersist.clear();
+		for (const symbol of tickersToSave) {
+			const data = this._tickerPrices.get(symbol);
+			if (!data) continue;
+
+			TickerDatabase.savePrice(symbol, data.price, true).catch((error) => {
+				console.error(`[Extension] Failed to persist ${symbol}:`, error);
+			});
+		}
 	}
 
 	private _updateDisplay() {
@@ -220,7 +250,12 @@ export default class GnomeShellExtension extends Extension {
 			.map((ticker) => {
 				const data = this._tickerPrices.get(ticker);
 				return data !== undefined
-					? { symbol: ticker, price: data.price, isRealtime: data.isRealtime }
+					? {
+							symbol: ticker,
+							price: data.price,
+							isRealtime: data.isRealtime,
+							trend: data.trend,
+						}
 					: null;
 			})
 			.filter((stock): stock is NonNullable<typeof stock> => stock !== null);
@@ -232,8 +267,12 @@ export default class GnomeShellExtension extends Extension {
 
 		const displayText = validStocks
 			.map((stock) => {
-				// Use yellow color for historical data, green for real-time
-				const priceColor = stock.isRealtime ? "#4ade80" : "#eab308";
+				let priceColor = "white";
+				if (stock.trend === "up") {
+					priceColor = "#30d475";
+				} else if (stock.trend === "down") {
+					priceColor = "#f66151";
+				}
 				return `<span color="white">${stock.symbol}</span> <span color="${priceColor}">$${stock.price.toFixed(2)}</span>`;
 			})
 			.join(" · ");

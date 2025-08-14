@@ -1,6 +1,6 @@
 import GLib from "gi://GLib";
 import Soup from "gi://Soup";
-import { TickerDatabase } from "./database.js";
+import { TickerDatabase, type PriceTrend } from "./database.js";
 
 type PriceUpdateCallback = (ticker: string, price: number) => void;
 
@@ -16,10 +16,10 @@ type UserDataPayload = {
 };
 
 type QuotePayload = {
-	c: string; // ticker symbol
-	ltp?: number; // last traded price
-	bbp?: number; // best bid price
-	contract_multiplier?: number; // for options
+	c: string;
+	ltp?: number;
+	bbp?: number;
+	contract_multiplier?: number;
 };
 
 export class TradenetWebSocket {
@@ -46,7 +46,6 @@ export class TradenetWebSocket {
 	): Promise<AuthResult> {
 		return new Promise((resolve) => {
 			try {
-				// Create form data string
 				const formData = `login=${encodeURIComponent(login)}&password=${encodeURIComponent(password)}`;
 
 				const message = new Soup.Message({
@@ -57,7 +56,6 @@ export class TradenetWebSocket {
 					),
 				});
 
-				// Set content type and body
 				message.request_headers.append(
 					"Content-Type",
 					"application/x-www-form-urlencoded",
@@ -67,7 +65,6 @@ export class TradenetWebSocket {
 					GLib.Bytes.new(new TextEncoder().encode(formData)),
 				);
 
-				// Send the request asynchronously to avoid blocking the shell
 				if (!this.session) {
 					resolve({ error: "Session not initialized" });
 					return;
@@ -75,17 +72,14 @@ export class TradenetWebSocket {
 				this.session.send_and_read_async(
 					message,
 					GLib.PRIORITY_DEFAULT,
-					null, // cancellable
-					// biome-ignore lint/suspicious/noExplicitAny: GJS async callback conflicts between @girs packages
-					(source: any, result: any) => {
+					null,
+					(source, result) => {
 						try {
 							if (!source) {
 								resolve({ error: "Network error during authentication" });
 								return;
 							}
-							const response = (source as Soup.Session).send_and_read_finish(
-								result,
-							);
+							const response = source.send_and_read_finish(result);
 							if (!response) {
 								resolve({ error: "Network error during authentication" });
 								return;
@@ -158,7 +152,7 @@ export class TradenetWebSocket {
 
 	static subscribeToTickers(tickers: string[]): void {
 		const instance = TradenetWebSocket.getInstance();
-		// Always update desired subscriptions, even if not connected yet
+
 		instance.desiredSubscriptions = new Set(tickers);
 
 		if (instance.isAuthenticated) {
@@ -168,14 +162,20 @@ export class TradenetWebSocket {
 
 	static async getHistoricalPrices(
 		tickers: string[],
-	): Promise<Map<string, { price: number; isRealtime: boolean }>> {
+	): Promise<
+		Map<string, { price: number; isRealtime: boolean; trend: PriceTrend }>
+	> {
 		const historicalData = await TickerDatabase.getAllPrices(tickers);
-		const result = new Map<string, { price: number; isRealtime: boolean }>();
+		const result = new Map<
+			string,
+			{ price: number; isRealtime: boolean; trend: PriceTrend }
+		>();
 
 		for (const [symbol, data] of historicalData) {
 			result.set(symbol, {
 				price: data.price,
 				isRealtime: data.isRealtime,
+				trend: data.trend || "same",
 			});
 		}
 
@@ -212,10 +212,10 @@ export class TradenetWebSocket {
 			}
 			this.session.websocket_connect_async(
 				message,
-				null, // origin
-				[], // protocols
-				GLib.PRIORITY_DEFAULT, // priority
-				null, // cancellable
+				null,
+				[],
+				GLib.PRIORITY_DEFAULT,
+				null,
 				(source, result) => {
 					try {
 						if (!source) {
@@ -286,7 +286,7 @@ export class TradenetWebSocket {
 					if (userPayload.mode === "prod") {
 						this.reconnectAttempts = 0;
 						this.isAuthenticated = true;
-						// Send initial subscription for all desired tickers
+
 						this.sendQuotes(this.desiredSubscriptions);
 					}
 				} else if (type === "q") {
@@ -295,7 +295,7 @@ export class TradenetWebSocket {
 						const ticker = quotePayload.c;
 						const isOption = ticker.startsWith("+");
 						const multiplier = isOption
-							? quotePayload.contract_multiplier || 100
+							? (quotePayload.contract_multiplier ?? 100)
 							: 1;
 						const bestBidOrLast =
 							typeof quotePayload.bbp === "number" && quotePayload.bbp > 0
@@ -304,8 +304,6 @@ export class TradenetWebSocket {
 						const price = bestBidOrLast * multiplier;
 
 						if (price > 0) {
-							// Save to database as real-time data
-							TickerDatabase.savePrice(ticker, price, true);
 							this.notifyPriceUpdate(ticker, price);
 						}
 					}

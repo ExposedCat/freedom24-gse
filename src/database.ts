@@ -1,11 +1,16 @@
 import Gda5 from "gi://Gda?version=5.0";
 import GLib from "gi://GLib";
+import GObject from "gi://GObject";
 
-type TickerData = {
+export type PriceTrend = "up" | "down" | "same";
+
+export type TickerData = {
 	symbol: string;
 	price: number;
+	previousPrice?: number;
 	timestamp: Date;
 	isRealtime: boolean;
+	trend?: PriceTrend;
 };
 
 export class TickerDatabase {
@@ -14,11 +19,9 @@ export class TickerDatabase {
 	private dbDir: string;
 
 	private constructor() {
-		// Store database in user's cache directory
 		const cacheDir = GLib.get_user_cache_dir();
 		this.dbDir = GLib.build_filenamev([cacheDir, "panel-stocks"]);
 
-		// Ensure directory exists
 		GLib.mkdir_with_parents(this.dbDir, 0o755);
 	}
 
@@ -38,13 +41,14 @@ export class TickerDatabase {
 
 			this.connection.open();
 
-			// Create table if not exists
 			this.connection.execute_non_select_command(`
 				CREATE TABLE IF NOT EXISTS ticker_prices (
 					symbol TEXT NOT NULL PRIMARY KEY,
 					price REAL NOT NULL,
+					previous_price REAL,
 					timestamp INTEGER NOT NULL,
-					is_realtime INTEGER NOT NULL DEFAULT 1
+					is_realtime INTEGER NOT NULL DEFAULT 1,
+					trend TEXT DEFAULT 'same'
 				);
 			`);
 
@@ -63,10 +67,19 @@ export class TickerDatabase {
 		if (!this.connection) return;
 
 		try {
-			// Use raw SQL for INSERT OR REPLACE which is simpler in this case
+			const currentData = await this.getLatestPrice(symbol);
+			const previousPrice = currentData?.price ?? price;
+
+			let trend: PriceTrend = "same";
+			if (price > previousPrice) {
+				trend = "up";
+			} else if (price < previousPrice) {
+				trend = "down";
+			}
+
 			this.connection.execute_non_select_command(`
-				INSERT OR REPLACE INTO ticker_prices (symbol, price, timestamp, is_realtime)
-				VALUES ('${symbol}', ${price}, ${Math.floor(Date.now() / 1000)}, ${Number(isRealtime)})
+				INSERT OR REPLACE INTO ticker_prices (symbol, price, previous_price, timestamp, is_realtime, trend)
+				VALUES ('${symbol}', ${price}, ${previousPrice}, ${Math.floor(Date.now() / 1000)}, ${Number(isRealtime)}, '${trend}')
 			`);
 		} catch (error) {
 			console.error(`[DB] Failed to save price for ${symbol}:`, error);
@@ -84,14 +97,22 @@ export class TickerDatabase {
 			builder.select_add_target("ticker_prices", "ticker_prices");
 			builder.select_add_field("symbol", "ticker_prices", "symbol");
 			builder.select_add_field("price", "ticker_prices", "price");
+			builder.select_add_field(
+				"previous_price",
+				"ticker_prices",
+				"previous_price",
+			);
 			builder.select_add_field("timestamp", "ticker_prices", "timestamp");
 			builder.select_add_field("is_realtime", "ticker_prices", "is_realtime");
+			builder.select_add_field("trend", "ticker_prices", "trend");
+			const gval = new GObject.Value();
+			gval.init(GObject.TYPE_STRING);
+			gval.set_string(symbol);
 			builder.set_where(
 				builder.add_cond(
 					Gda5.SqlOperatorType.EQ,
 					builder.add_field_id("symbol", null),
-					// biome-ignore lint/suspicious/noExplicitAny: GDA typing requires any for value expressions
-					builder.add_expr_value(null, symbol as unknown as any),
+					builder.add_expr_value(null, gval),
 					0,
 				),
 			);
@@ -103,26 +124,7 @@ export class TickerDatabase {
 			const iterator = result.create_iter();
 
 			if (iterator.move_next()) {
-				// GDA Value types need explicit conversion (GJS typing limitation)
-				const symbolValue = iterator.get_value_for_field(
-					"symbol",
-				) as unknown as string;
-				const priceValue = iterator.get_value_for_field(
-					"price",
-				) as unknown as number;
-				const timestampValue = iterator.get_value_for_field(
-					"timestamp",
-				) as unknown as number;
-				const isRealtimeValue = iterator.get_value_for_field(
-					"is_realtime",
-				) as unknown as number;
-
-				return {
-					symbol: symbolValue,
-					price: priceValue,
-					timestamp: new Date(timestampValue * 1000),
-					isRealtime: Boolean(isRealtimeValue),
-				};
+				return this.parseTickerFromIter(iterator);
 			}
 		} catch (error) {
 			console.error(`[DB] Failed to get price for ${symbol}:`, error);
@@ -139,18 +141,79 @@ export class TickerDatabase {
 		if (!this.connection || symbols.length === 0) return prices;
 
 		try {
-			// For simplicity, get each symbol individually using the existing method
+			const builder = new Gda5.SqlBuilder({
+				stmt_type: Gda5.SqlStatementType.SELECT,
+			});
+			builder.select_add_target("ticker_prices", "ticker_prices");
+			builder.select_add_field("symbol", "ticker_prices", "symbol");
+			builder.select_add_field("price", "ticker_prices", "price");
+			builder.select_add_field(
+				"previous_price",
+				"ticker_prices",
+				"previous_price",
+			);
+			builder.select_add_field("timestamp", "ticker_prices", "timestamp");
+			builder.select_add_field("is_realtime", "ticker_prices", "is_realtime");
+			builder.select_add_field("trend", "ticker_prices", "trend");
+
+			let whereId: number | null = null;
 			for (const symbol of symbols) {
-				const data = await this.getLatestPrice(symbol);
-				if (data) {
-					prices.set(symbol, data);
+				const gval = new GObject.Value();
+				gval.init(GObject.TYPE_STRING);
+				gval.set_string(symbol);
+				const eqId = builder.add_cond(
+					Gda5.SqlOperatorType.EQ,
+					builder.add_field_id("symbol", null),
+					builder.add_expr_value(null, gval),
+					0,
+				);
+				if (whereId === null) {
+					whereId = eqId;
+				} else {
+					whereId = builder.add_cond(Gda5.SqlOperatorType.OR, whereId, eqId, 0);
 				}
+			}
+			if (whereId !== null) builder.set_where(whereId);
+
+			const result = this.connection.statement_execute_select(
+				builder.get_statement(),
+				null,
+			);
+			const iterator = result.create_iter();
+			while (iterator.move_next()) {
+				const parsed = this.parseTickerFromIter(iterator);
+				prices.set(parsed.symbol, parsed);
 			}
 		} catch (error) {
 			console.error("[DB] Failed to get all prices:", error);
 		}
 
 		return prices;
+	}
+
+	private getValue<T>(iterator: Gda5.DataModelIter, field: string): T {
+		return iterator.get_value_for_field(field) as unknown as T;
+	}
+
+	private parseTickerFromIter(iterator: Gda5.DataModelIter): TickerData {
+		const symbolValue = this.getValue<string>(iterator, "symbol");
+		const priceValue = this.getValue<number>(iterator, "price");
+		const previousPriceValue = this.getValue<number>(
+			iterator,
+			"previous_price",
+		);
+		const timestampValue = this.getValue<number>(iterator, "timestamp");
+		const isRealtimeValue = this.getValue<number>(iterator, "is_realtime");
+		const trendValue = this.getValue<string>(iterator, "trend");
+
+		return {
+			symbol: symbolValue,
+			price: priceValue,
+			previousPrice: previousPriceValue || undefined,
+			timestamp: new Date(timestampValue * 1000),
+			isRealtime: Boolean(isRealtimeValue),
+			trend: (trendValue as PriceTrend) || "same",
+		};
 	}
 
 	async cleanup(): Promise<void> {
