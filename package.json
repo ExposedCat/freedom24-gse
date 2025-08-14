@@ -15,7 +15,6 @@
 	"license": "LGPL-3.0-or-later",
 	"devDependencies": {
 		"@girs/gda-5.0": "^5.0.0-4.0.0-beta.14",
-		"@girs/adw-1": "^1.0.0-4.0.0-beta.14",
 		"@types/node": "^22.4.0",
 		"typescript": "^5.5.3"
 	},
@@ -32,7 +31,8 @@
 	"dependencies": {
 		"@biomejs/biome": "^1.9.4",
 		"@girs/gjs": "^4.0.0-beta.7",
-		"@girs/gnome-shell": "^46.0.1"
+		"@girs/gnome-shell": "^46.0.1",
+		"@girs/soup-3.0": "^3.6.5-4.0.0-beta.25"
 	},
 	"packageManager": "pnpm@8.14.2+sha1.1670a65b60df5f95e9f0cb7de46e605d9bd74fda"
 }

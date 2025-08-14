@@ -6,6 +6,16 @@
       <summary>Stock tickers</summary>
       <description>List of stock ticker symbols to display in the panel.</description>
     </key>
+    <key name="tradernet-login" type="s">
+      <default>""</default>
+      <summary>Tradernet Login</summary>
+      <description>Your Tradernet/Freedom24 login.</description>
+    </key>
+    <key name="tradernet-password" type="s">
+      <default>""</default>
+      <summary>Tradernet Password</summary>
+      <description>Your Tradernet/Freedom24 password.</description>
+    </key>
   </schema>
   
 </schemalist>

@@ -29,6 +29,27 @@ export default class PreferencesManager extends ExtensionPreferences {
 		});
 		window.add(page);
 
+		// Authentication Group
+		const authGroup = new Adw.PreferencesGroup({
+			title: "Authentication",
+			description: "Tradernet WebSocket authentication settings",
+		});
+		page.add(authGroup);
+
+		const loginRow = new Adw.EntryRow({
+			title: "Login",
+			text: settings.get_string("tradernet-login"),
+		});
+		this.bindStringRow(settings, loginRow, "tradernet-login");
+		authGroup.add(loginRow);
+
+		const passwordRow = new Adw.PasswordEntryRow({
+			title: "Password",
+			text: settings.get_string("tradernet-password"),
+		});
+		this.bindStringRow(settings, passwordRow, "tradernet-password");
+		authGroup.add(passwordRow);
+
 		// Stock Tickers Group
 		const tickersGroup = new Adw.PreferencesGroup({
 			title: "Stock Tickers",
