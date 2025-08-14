@@ -4,6 +4,18 @@ import { TickerDatabase, type PriceTrend } from "./database.js";
 
 type PriceUpdateCallback = (ticker: string, price: number) => void;
 
+type MarketState = "open" | "closed" | "pre" | "post";
+
+const getMarketState = (): MarketState => {
+	const now = new Date();
+	const h = now.getHours();
+	const m = now.getMinutes();
+	if (h < 10) return "closed";
+	if (h < 15 || (h === 15 && m < 30)) return "pre";
+	if (h < 22) return "open";
+	return "post";
+};
+
 type AuthResult = {
 	SID?: string;
 	error?: string;
@@ -294,16 +306,24 @@ export class TradenetWebSocket {
 					const hasBbp =
 						typeof quotePayload.bbp === "number" && quotePayload.bbp > 0;
 					const hasLtp = typeof quotePayload.ltp === "number";
+
 					if (quotePayload.c && (hasBbp || hasLtp)) {
 						const ticker = quotePayload.c;
 						const isOption = ticker.startsWith("+");
 						const multiplier = isOption
 							? (quotePayload.contract_multiplier ?? 100)
 							: 1;
-						const bestBidOrLast = hasBbp
+
+						const selectedRawPrice = hasBbp
 							? (quotePayload.bbp as number)
-							: (quotePayload.ltp as number);
-						const price = bestBidOrLast * multiplier;
+							: hasLtp && getMarketState() === "open"
+								? (quotePayload.ltp as number)
+								: null;
+						if (selectedRawPrice === null) {
+							return;
+						}
+
+						const price = selectedRawPrice * multiplier;
 
 						if (price > 0) {
 							TickerDatabase.savePrice(ticker, price, true)

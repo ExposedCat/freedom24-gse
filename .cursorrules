@@ -3,7 +3,6 @@ STRICTLY FOLLOW THESE INSTRUCTIONS:
 - Always do minimal changes to the codebase to achieve the task
 - Always write production-grade code
 - Always use `type` instead of `interface`
-- Always use env for relevant constants
 - Always only write what is needed right now. Keep all your edits as minimal and
   concise as possible to perform a task. Always start by a small research and
   implementation plan, proceed only after confirmation
