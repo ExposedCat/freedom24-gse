@@ -16,7 +16,7 @@ type UserDataPayload = {
 };
 
 type QuotePayload = {
-	c: string;
+	c?: string;
 	ltp?: number;
 	bbp?: number;
 	contract_multiplier?: number;
@@ -291,20 +291,28 @@ export class TradenetWebSocket {
 					}
 				} else if (type === "q") {
 					const quotePayload = payload as QuotePayload;
-					if (quotePayload.c && quotePayload.ltp !== undefined) {
+					const hasBbp =
+						typeof quotePayload.bbp === "number" && quotePayload.bbp > 0;
+					const hasLtp = typeof quotePayload.ltp === "number";
+					if (quotePayload.c && (hasBbp || hasLtp)) {
 						const ticker = quotePayload.c;
 						const isOption = ticker.startsWith("+");
 						const multiplier = isOption
 							? (quotePayload.contract_multiplier ?? 100)
 							: 1;
-						const bestBidOrLast =
-							typeof quotePayload.bbp === "number" && quotePayload.bbp > 0
-								? quotePayload.bbp
-								: quotePayload.ltp;
+						const bestBidOrLast = hasBbp
+							? (quotePayload.bbp as number)
+							: (quotePayload.ltp as number);
 						const price = bestBidOrLast * multiplier;
 
 						if (price > 0) {
-							this.notifyPriceUpdate(ticker, price);
+							TickerDatabase.savePrice(ticker, price, true)
+								.then(() => {
+									this.notifyPriceUpdate(ticker, price);
+								})
+								.catch((error) => {
+									console.error(`[WS] Failed to persist ${ticker}:`, error);
+								});
 						}
 					}
 				}

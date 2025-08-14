@@ -198,9 +198,6 @@ export default class GnomeShellExtension extends Extension {
 		}
 		this._tickerPrices.set(ticker, { price, isRealtime: true, trend });
 		this._updateDisplay();
-
-		this._pendingPersist.add(ticker);
-		this._schedulePersist();
 	}
 
 	private _schedulePersist() {
