@@ -5,7 +5,7 @@ import St from "gi://St";
 import Clutter from "gi://Clutter";
 import GLib from "gi://GLib";
 import type Gio from "gi://Gio";
-import { TradenetWebSocket } from "./websocket.js";
+import { TradenetWebSocket, getMarketState } from "./websocket.js";
 import { TickerDatabase, type PriceTrend } from "./database.js";
 
 export default class GnomeShellExtension extends Extension {
@@ -25,6 +25,8 @@ export default class GnomeShellExtension extends Extension {
 	private _persistTimeoutId: number | null = null;
 	private _persistDebounceMs = 3000;
 	private _pendingPersist = new Set<string>();
+	private _connectionStateCallback: ((isConnected: boolean) => void) | null =
+		null;
 
 	enable() {
 		this._settings = this.getSettings();
@@ -65,6 +67,12 @@ export default class GnomeShellExtension extends Extension {
 			},
 		);
 
+		this._connectionStateCallback = (isConnected: boolean) => {
+			this._isConnected = isConnected;
+			this._updateDisplay();
+		};
+		TradenetWebSocket.addConnectionStateCallback(this._connectionStateCallback);
+
 		this._initializeAsync();
 	}
 
@@ -92,6 +100,13 @@ export default class GnomeShellExtension extends Extension {
 		if (this._persistTimeoutId) {
 			GLib.source_remove(this._persistTimeoutId);
 			this._persistTimeoutId = null;
+		}
+
+		if (this._connectionStateCallback) {
+			TradenetWebSocket.removeConnectionStateCallback(
+				this._connectionStateCallback,
+			);
+			this._connectionStateCallback = null;
 		}
 
 		TradenetWebSocket.disconnect();
@@ -238,7 +253,7 @@ export default class GnomeShellExtension extends Extension {
 			return;
 		}
 
-		if (!this._isConnected) {
+		if (!TradenetWebSocket.isConnected()) {
 			this._label.set_text("Disconnected");
 			return;
 		}
@@ -270,10 +285,12 @@ export default class GnomeShellExtension extends Extension {
 				} else if (stock.trend === "down") {
 					priceColor = "#f66151";
 				}
-				return `<span color="white">${stock.symbol}</span> <span color="${priceColor}">$${stock.price.toFixed(2)}</span>`;
+				return `<span foreground="white">${stock.symbol}</span> <span foreground="${priceColor}">$${stock.price.toFixed(2)}</span>`;
 			})
 			.join(" · ");
 
 		this._label.clutter_text.set_markup(displayText);
+		const state = getMarketState();
+		this._label.opacity = state === "closed" ? 255 * 0.3 : 255;
 	}
 }

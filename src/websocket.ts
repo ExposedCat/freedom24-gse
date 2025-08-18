@@ -4,10 +4,12 @@ import { TickerDatabase, type PriceTrend } from "./database.js";
 
 type PriceUpdateCallback = (ticker: string, price: number) => void;
 
-type MarketState = "open" | "closed" | "pre" | "post";
+export type MarketState = "open" | "closed" | "pre" | "post";
 
-const getMarketState = (): MarketState => {
+export const getMarketState = (): MarketState => {
 	const now = new Date();
+	const day = now.getDay();
+	if (day === 0 || day === 6) return "closed";
 	const h = now.getHours();
 	const m = now.getMinutes();
 	if (h < 10) return "closed";
@@ -47,6 +49,10 @@ export class TradenetWebSocket {
 	private baseReconnectDelay = 1000;
 	private priceUpdateCallbacks: PriceUpdateCallback[] = [];
 	private isAuthenticated = false;
+	private periodicResubscribeTimeoutId: number | null = null;
+	private resendConfirmTimeoutId: number | null = null;
+	private waitingForResendResponse = false;
+	private connectionStateCallbacks: Array<(isConnected: boolean) => void> = [];
 
 	private constructor() {
 		this.session = new Soup.Session();
@@ -132,6 +138,21 @@ export class TradenetWebSocket {
 	static addPriceUpdateCallback(callback: PriceUpdateCallback): void {
 		const instance = TradenetWebSocket.getInstance();
 		instance.priceUpdateCallbacks.push(callback);
+	}
+
+	static addConnectionStateCallback(
+		callback: (isConnected: boolean) => void,
+	): void {
+		const instance = TradenetWebSocket.getInstance();
+		instance.connectionStateCallbacks.push(callback);
+	}
+
+	static removeConnectionStateCallback(
+		callback: (isConnected: boolean) => void,
+	): void {
+		const instance = TradenetWebSocket.getInstance();
+		const index = instance.connectionStateCallbacks.indexOf(callback);
+		if (index !== -1) instance.connectionStateCallbacks.splice(index, 1);
 	}
 
 	static async authenticateAndConnect(
@@ -271,6 +292,9 @@ export class TradenetWebSocket {
 
 		this.connection.connect("closed", () => {
 			this.isAuthenticated = false;
+			this.clearPeriodicResubscribe();
+			this.clearResendConfirm();
+			this.notifyConnectionState(false);
 
 			if (!this.isIntentionallyDisconnected && this.adminSID) {
 				this.scheduleReconnection();
@@ -281,7 +305,6 @@ export class TradenetWebSocket {
 			"error",
 			(_conn: Soup.WebsocketConnection, error: GLib.Error) => {
 				console.error("[WS] Error:", error.message);
-				this.isAuthenticated = false;
 			},
 		);
 	}
@@ -298,10 +321,17 @@ export class TradenetWebSocket {
 					if (userPayload.mode === "prod") {
 						this.reconnectAttempts = 0;
 						this.isAuthenticated = true;
+						this.notifyConnectionState(true);
 
 						this.sendQuotes(this.desiredSubscriptions);
+						this.startPeriodicResubscribe();
 					}
 				} else if (type === "q") {
+					this.markResendResponseReceived();
+					if (!this.isAuthenticated) {
+						this.isAuthenticated = true;
+						this.notifyConnectionState(true);
+					}
 					const quotePayload = payload as QuotePayload;
 					const hasBbp =
 						typeof quotePayload.bbp === "number" && quotePayload.bbp > 0;
@@ -352,6 +382,7 @@ export class TradenetWebSocket {
 		}
 		if (this.connection) {
 			this.connection.send_text(JSON.stringify(["quotes", list]));
+			this.startResendConfirm();
 		}
 	}
 
@@ -388,6 +419,71 @@ export class TradenetWebSocket {
 		);
 	}
 
+	private startPeriodicResubscribe(): void {
+		this.clearPeriodicResubscribe();
+		this.periodicResubscribeTimeoutId = GLib.timeout_add(
+			GLib.PRIORITY_DEFAULT,
+			7 * 1000,
+			() => {
+				console.log("[WS] resubscribing");
+				this.sendQuotes(this.desiredSubscriptions);
+				return GLib.SOURCE_CONTINUE;
+			},
+		);
+	}
+
+	private clearPeriodicResubscribe(): void {
+		if (this.periodicResubscribeTimeoutId) {
+			GLib.source_remove(this.periodicResubscribeTimeoutId);
+			this.periodicResubscribeTimeoutId = null;
+		}
+	}
+
+	private startResendConfirm(): void {
+		console.log("[WS] startResendConfirm");
+		this.clearResendConfirm();
+		this.waitingForResendResponse = true;
+		this.resendConfirmTimeoutId = GLib.timeout_add(
+			GLib.PRIORITY_DEFAULT,
+			2 * 1000,
+			() => {
+				if (this.waitingForResendResponse) {
+					console.log("[WS] force reconnect");
+					this.forceReconnectNow();
+				} else {
+					console.log("[WS] got response no reconnect");
+				}
+				this.resendConfirmTimeoutId = null;
+				return GLib.SOURCE_REMOVE;
+			},
+		);
+	}
+
+	private clearResendConfirm(): void {
+		if (this.resendConfirmTimeoutId) {
+			GLib.source_remove(this.resendConfirmTimeoutId);
+			this.resendConfirmTimeoutId = null;
+		}
+		this.waitingForResendResponse = false;
+	}
+
+	private markResendResponseReceived(): void {
+		this.clearResendConfirm();
+	}
+
+	private forceReconnectNow(): void {
+		if (!this.adminSID) return;
+		this.isIntentionallyDisconnected = true;
+		if (this.connection) {
+			this.connection.close(Soup.WebsocketCloseCode.NORMAL, null);
+		}
+		this.isAuthenticated = false;
+		this.clearPeriodicResubscribe();
+		this.clearResendConfirm();
+		this.isIntentionallyDisconnected = false;
+		void this.connectInstance(this.adminSID);
+	}
+
 	private async disconnectInstance(): Promise<void> {
 		this.isIntentionallyDisconnected = true;
 		this.isAuthenticated = false;
@@ -421,6 +517,16 @@ export class TradenetWebSocket {
 				callback(ticker, price);
 			} catch (error) {
 				console.error(`[WS] Error in price callback for ${ticker}:`, error);
+			}
+		}
+	}
+
+	private notifyConnectionState(isConnected: boolean): void {
+		for (const callback of this.connectionStateCallbacks) {
+			try {
+				callback(isConnected);
+			} catch (error) {
+				console.error("[WS] Error in connection state callback:", error);
 			}
 		}
 	}
