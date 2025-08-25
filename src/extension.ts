@@ -243,6 +243,12 @@ export default class GnomeShellExtension extends Extension {
 		}
 	}
 
+	private formatTicker(ticker: string) {
+		return ticker.startsWith("+")
+			? ticker.split(".")[0]
+			: ticker.replaceAll(".US", "");
+	}
+
 	private _updateDisplay() {
 		if (!this._settings || !this._label) return;
 
@@ -285,7 +291,8 @@ export default class GnomeShellExtension extends Extension {
 				} else if (stock.trend === "down") {
 					priceColor = "#f66151";
 				}
-				return `<span foreground="white">${stock.symbol}</span> <span foreground="${priceColor}">$${stock.price.toFixed(2)}</span>`;
+				const displaySymbol = this.formatTicker(stock.symbol);
+				return `<span foreground="white">${displaySymbol}</span> <span foreground="${priceColor}">$${stock.price.toFixed(2)}</span>`;
 			})
 			.join(" · ");
 
