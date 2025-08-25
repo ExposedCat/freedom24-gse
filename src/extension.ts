@@ -42,6 +42,31 @@ export default class GnomeShellExtension extends Extension {
 	private _portfolioTickers: string[] = [];
 	private _portfolioPositions: PortfolioPosition[] = [];
 
+	private _getPortfolioQuoteSymbols(): string[] {
+		const symbols = new Set<string>();
+		for (const position of this._portfolioPositions) {
+			if (position.instrument) symbols.add(position.instrument);
+			if (position.baseContractCode) symbols.add(position.baseContractCode);
+		}
+		return Array.from(symbols);
+	}
+
+	private async _preloadPortfolioBasePrices() {
+		const baseSymbols = this._getPortfolioQuoteSymbols();
+		if (baseSymbols.length === 0) return;
+		try {
+			const historicalData =
+				await TradenetWebSocket.getHistoricalPrices(baseSymbols);
+			for (const [ticker, data] of historicalData) {
+				this._tickerPrices.set(ticker, {
+					price: data.price,
+					isRealtime: data.isRealtime,
+					trend: data.trend,
+				});
+			}
+		} catch {}
+	}
+
 	enable() {
 		this._settings = this.getSettings();
 
@@ -89,6 +114,8 @@ export default class GnomeShellExtension extends Extension {
 		this._portfolioUpdateCallback = (tickers: string[]) => {
 			this._portfolioTickers = tickers;
 			this._portfolioPositions = TradenetWebSocket.getPortfolioPositions();
+			void this._preloadPortfolioBasePrices();
+			this._updateSubscriptions();
 			this._rebuildPortfolioMenu();
 		};
 		TradenetWebSocket.addPortfolioUpdateCallback(this._portfolioUpdateCallback);
@@ -230,8 +257,10 @@ export default class GnomeShellExtension extends Extension {
 	private _updateSubscriptions() {
 		if (!this._settings) return;
 
-		const tickers = this._settings.get_strv("tickers");
-		TradenetWebSocket.subscribeToTickers(tickers);
+		const userTickers = this._settings.get_strv("tickers");
+		const portfolioSymbols = this._getPortfolioQuoteSymbols();
+		const unique = Array.from(new Set([...userTickers, ...portfolioSymbols]));
+		TradenetWebSocket.subscribeToTickers(unique);
 
 		this._loadHistoricalData();
 	}
@@ -245,6 +274,7 @@ export default class GnomeShellExtension extends Extension {
 		}
 		this._tickerPrices.set(ticker, { price, isRealtime: true, trend });
 		this._updateDisplay();
+		this._rebuildPortfolioMenu();
 	}
 
 	private _updateDisplay() {
@@ -311,7 +341,7 @@ export default class GnomeShellExtension extends Extension {
 		}
 		for (const position of this._portfolioPositions) {
 			const text = this._formatPosition(position);
-			const item = new PopupMenu.PopupMenuItem(text, { reactive: false });
+			const item = new PopupMenu.PopupMenuItem(text, { reactive: true });
 			this._portfolioSection.addMenuItem(item);
 		}
 	}
@@ -328,14 +358,23 @@ export default class GnomeShellExtension extends Extension {
 				: position.closePrice !== null
 					? position.closePrice
 					: 0;
-		const multiplier = position.contractMultiplier ?? 100;
-		const currentPrice = marketOrClose * multiplier * position.quantity;
+		const fallbackMultiplier =
+			position.contractMultiplier ?? position.faceValA ?? 1;
+		const liveEntry = this._tickerPrices.get(position.instrument);
+		const perContractValue = liveEntry
+			? liveEntry.price
+			: marketOrClose * fallbackMultiplier;
+		const currentPrice = perContractValue * position.quantity;
 		const profit = currentPrice - startPrice;
 		const percent = startPrice !== 0 ? (profit / startPrice) * 100 : 0;
 		const stateIcon = profit > 0 ? "🟢" : profit < 0 ? "🔴" : "⚪";
 		const firstLine = `${stateIcon} ${base} ${formatMoneyChange(profit)} ${formatPercentageChange(percent)}`;
 
-		const baseTickerPrice = marketOrClose;
+		const baseSymbol = position.baseContractCode || position.instrument;
+		const basePriceEntry = this._tickerPrices.get(baseSymbol);
+		const baseTickerPrice = basePriceEntry
+			? basePriceEntry.price
+			: marketOrClose;
 		const strikeMatch = position.instrument.split("C").at(-1);
 		const strike = strikeMatch ? Number(strikeMatch) : 0;
 		const strikeChange = baseTickerPrice - strike;
