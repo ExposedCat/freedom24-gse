@@ -1,16 +1,22 @@
 import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
+import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import St from "gi://St";
 import Clutter from "gi://Clutter";
 import GLib from "gi://GLib";
 import type Gio from "gi://Gio";
-import { TradenetWebSocket, getMarketState } from "./websocket.js";
+import {
+	TradenetWebSocket,
+	getMarketState,
+	type PortfolioPosition,
+} from "./websocket.js";
 import { TickerDatabase, type PriceTrend } from "./database.js";
 
 export default class GnomeShellExtension extends Extension {
 	private _panelButton: PanelMenu.Button | null = null;
 	private _label: St.Label | null = null;
+	private _portfolioSection: PopupMenu.PopupMenuSection | null = null;
 	private _settings: Gio.Settings | null = null;
 	private _settingsChangedId: number | null = null;
 	private _sidChangedId: number | null = null;
@@ -27,6 +33,9 @@ export default class GnomeShellExtension extends Extension {
 	private _pendingPersist = new Set<string>();
 	private _connectionStateCallback: ((isConnected: boolean) => void) | null =
 		null;
+	private _portfolioUpdateCallback: ((tickers: string[]) => void) | null = null;
+	private _portfolioTickers: string[] = [];
+	private _portfolioPositions: PortfolioPosition[] = [];
 
 	enable() {
 		this._settings = this.getSettings();
@@ -41,6 +50,11 @@ export default class GnomeShellExtension extends Extension {
 		this._label.clutter_text.use_markup = true;
 
 		this._panelButton.add_child(this._label);
+
+		this._portfolioSection = new PopupMenu.PopupMenuSection();
+		const menuWithAdd: { addMenuItem: (item: unknown) => void } = this
+			._panelButton.menu as unknown as { addMenuItem: (item: unknown) => void };
+		menuWithAdd.addMenuItem(this._portfolioSection);
 		Main.panel.addToStatusArea("stock-tickers", this._panelButton, 1, "left");
 
 		this._settingsChangedId = this._settings.connect("changed::tickers", () => {
@@ -66,6 +80,13 @@ export default class GnomeShellExtension extends Extension {
 				this._onPriceUpdate(ticker, price);
 			},
 		);
+
+		this._portfolioUpdateCallback = (tickers: string[]) => {
+			this._portfolioTickers = tickers;
+			this._portfolioPositions = TradenetWebSocket.getPortfolioPositions();
+			this._rebuildPortfolioMenu();
+		};
+		TradenetWebSocket.addPortfolioUpdateCallback(this._portfolioUpdateCallback);
 
 		this._connectionStateCallback = (isConnected: boolean) => {
 			this._isConnected = isConnected;
@@ -118,9 +139,16 @@ export default class GnomeShellExtension extends Extension {
 		}
 
 		this._label = null;
+		this._portfolioSection = null;
 		this._settings = null;
 		this._tickerPrices.clear();
 		this._isConnected = false;
+		if (this._portfolioUpdateCallback) {
+			TradenetWebSocket.removePortfolioUpdateCallback(
+				this._portfolioUpdateCallback,
+			);
+			this._portfolioUpdateCallback = null;
+		}
 	}
 
 	private async _initializeAsync() {
@@ -129,6 +157,10 @@ export default class GnomeShellExtension extends Extension {
 		await this._loadHistoricalData();
 
 		this._connectWebSocket();
+
+		this._portfolioTickers = TradenetWebSocket.getPortfolioTickers();
+		this._portfolioPositions = TradenetWebSocket.getPortfolioPositions();
+		this._rebuildPortfolioMenu();
 	}
 
 	private async _loadHistoricalData() {
@@ -299,5 +331,92 @@ export default class GnomeShellExtension extends Extension {
 		this._label.clutter_text.set_markup(displayText);
 		const state = getMarketState();
 		this._label.opacity = state === "closed" ? 255 * 0.3 : 255;
+	}
+
+	private _rebuildPortfolioMenu() {
+		if (!this._portfolioSection) return;
+		this._portfolioSection.removeAll();
+		if (this._portfolioPositions.length === 0) {
+			const item = new PopupMenu.PopupMenuItem("No positions", {
+				reactive: false,
+			});
+			this._portfolioSection.addMenuItem(item);
+			return;
+		}
+		for (const position of this._portfolioPositions) {
+			const text = this._formatPosition(position);
+			const item = new PopupMenu.PopupMenuItem(text, { reactive: false });
+			this._portfolioSection.addMenuItem(item);
+		}
+	}
+
+	private _formatMoneyChange(value: number): string {
+		const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+		const abs = Math.abs(value);
+		if (abs >= 1000) return `${sign}$${Math.round(abs).toLocaleString()}`;
+		return `${sign}$${abs.toFixed(2)}`;
+	}
+
+	private _formatPercentageChange(value: number): string {
+		const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+		const abs = Math.abs(value);
+		return `${sign}${abs.toFixed(1)}%`;
+	}
+
+	private _formatTimeLeft(start: Date, end: Date): string {
+		let diff = end.getTime() - start.getTime();
+		if (diff <= 0) return "now";
+		const units = [
+			{ label: "y", ms: 1000 * 60 * 60 * 24 * 365 },
+			{ label: "m", ms: 1000 * 60 * 60 * 24 * 30 },
+			{ label: "d", ms: 1000 * 60 * 60 * 24 },
+			{ label: "h", ms: 1000 * 60 * 60 },
+			{ label: "m", ms: 1000 * 60 },
+		];
+		const result: string[] = [];
+		let used = 0;
+		for (const unit of units) {
+			if (used >= 2) break;
+			const value = Math.floor(diff / unit.ms);
+			if (value > 0) {
+				result.push(`${value}${unit.label}`);
+				diff -= value * unit.ms;
+				used++;
+			}
+		}
+		return result.length > 0 ? result.join(" ") : "now";
+	}
+
+	private _formatPosition(position: PortfolioPosition): string {
+		const base = (position.baseContractCode || position.instrument).replace(
+			/\.US$/,
+			"",
+		);
+		const startPrice = position.priceA * position.faceValA * position.quantity;
+		const marketOrClose =
+			position.marketPrice !== null
+				? position.marketPrice
+				: position.closePrice !== null
+					? position.closePrice
+					: 0;
+		const multiplier = position.contractMultiplier ?? 100;
+		const currentPrice = marketOrClose * multiplier * position.quantity;
+		const profit = currentPrice - startPrice;
+		const percent = startPrice !== 0 ? (profit / startPrice) * 100 : 0;
+		const stateIcon = profit > 0 ? "🟢" : profit < 0 ? "🔴" : "⚪";
+		const firstLine = `${stateIcon} ${base} ${this._formatMoneyChange(profit)} ${this._formatPercentageChange(percent)}`;
+
+		const baseTickerPrice = marketOrClose;
+		const strikeMatch = position.instrument.split("C").at(-1);
+		const strike = strikeMatch ? Number(strikeMatch) : 0;
+		const strikeChange = baseTickerPrice - strike;
+		const timeFromNow = this._formatTimeLeft(
+			new Date(),
+			new Date(position.maturity),
+		);
+		const secondLine = `${this._formatMoneyChange(currentPrice)} · $${baseTickerPrice.toFixed(2)} (${this._formatMoneyChange(strikeChange)}) · ${timeFromNow}`;
+
+		const openOrderLine = "";
+		return `${firstLine}\n${secondLine}${openOrderLine}`;
 	}
 }

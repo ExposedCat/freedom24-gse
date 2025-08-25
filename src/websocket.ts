@@ -3,6 +3,7 @@ import Soup from "gi://Soup";
 import { TickerDatabase, type PriceTrend } from "./database.js";
 
 type PriceUpdateCallback = (ticker: string, price: number) => void;
+type PortfolioUpdateCallback = (tickers: string[]) => void;
 
 export type MarketState = "open" | "closed" | "pre" | "post";
 
@@ -36,6 +37,18 @@ type QuotePayload = {
 	contract_multiplier?: number;
 };
 
+export type PortfolioPosition = {
+	instrument: string;
+	baseContractCode: string;
+	priceA: number;
+	faceValA: number;
+	quantity: number;
+	maturity: string;
+	marketPrice: number | null;
+	closePrice: number | null;
+	contractMultiplier: number | null;
+};
+
 export class TradenetWebSocket {
 	private static instance: TradenetWebSocket | null = null;
 	private session: Soup.Session | null = null;
@@ -48,11 +61,14 @@ export class TradenetWebSocket {
 	private maxReconnectAttempts = 5;
 	private baseReconnectDelay = 1000;
 	private priceUpdateCallbacks: PriceUpdateCallback[] = [];
+	private portfolioUpdateCallbacks: PortfolioUpdateCallback[] = [];
 	private isAuthenticated = false;
 	private periodicResubscribeTimeoutId: number | null = null;
 	private resendConfirmTimeoutId: number | null = null;
 	private waitingForResendResponse = false;
 	private connectionStateCallbacks: Array<(isConnected: boolean) => void> = [];
+	private portfolioTickers: string[] = [];
+	private portfolioPositions: PortfolioPosition[] = [];
 
 	private constructor() {
 		this.session = new Soup.Session();
@@ -138,6 +154,29 @@ export class TradenetWebSocket {
 	static addPriceUpdateCallback(callback: PriceUpdateCallback): void {
 		const instance = TradenetWebSocket.getInstance();
 		instance.priceUpdateCallbacks.push(callback);
+	}
+
+	static addPortfolioUpdateCallback(callback: PortfolioUpdateCallback): void {
+		const instance = TradenetWebSocket.getInstance();
+		instance.portfolioUpdateCallbacks.push(callback);
+	}
+
+	static removePortfolioUpdateCallback(
+		callback: PortfolioUpdateCallback,
+	): void {
+		const instance = TradenetWebSocket.getInstance();
+		const index = instance.portfolioUpdateCallbacks.indexOf(callback);
+		if (index !== -1) instance.portfolioUpdateCallbacks.splice(index, 1);
+	}
+
+	static getPortfolioTickers(): string[] {
+		const instance = TradenetWebSocket.getInstance();
+		return instance.portfolioTickers.slice();
+	}
+
+	static getPortfolioPositions(): PortfolioPosition[] {
+		const instance = TradenetWebSocket.getInstance();
+		return instance.portfolioPositions.slice();
 	}
 
 	static addConnectionStateCallback(
@@ -325,6 +364,7 @@ export class TradenetWebSocket {
 
 						this.sendQuotes(this.desiredSubscriptions);
 						this.startPeriodicResubscribe();
+						this.requestPortfolio();
 					}
 				} else if (type === "q") {
 					this.markResendResponseReceived();
@@ -365,6 +405,49 @@ export class TradenetWebSocket {
 								});
 						}
 					}
+				} else if (type === "portfolio") {
+					const portfolioPayload = payload as {
+						pos?: Array<{
+							i?: string;
+							base_contract_code?: string;
+							price_a?: number;
+							face_val_a?: number;
+							q?: number;
+							maturity_d?: string;
+							mkt_price?: number;
+							close_price?: number;
+							contract_multiplier?: number;
+						}>;
+					};
+					const positionsRaw = Array.isArray(portfolioPayload.pos)
+						? portfolioPayload.pos
+						: [];
+					const tickers = positionsRaw
+						.map((position) => position.i)
+						.filter(
+							(value): value is string =>
+								typeof value === "string" && value.length > 0,
+						);
+					const uniqueTickers = Array.from(new Set(tickers));
+					this.portfolioTickers = uniqueTickers;
+					this.portfolioPositions = positionsRaw
+						.map((p) => ({
+							instrument: p.i ?? "",
+							baseContractCode: p.base_contract_code ?? "",
+							priceA: typeof p.price_a === "number" ? p.price_a : 0,
+							faceValA: typeof p.face_val_a === "number" ? p.face_val_a : 0,
+							quantity: typeof p.q === "number" ? p.q : 0,
+							maturity: p.maturity_d ?? "",
+							marketPrice: typeof p.mkt_price === "number" ? p.mkt_price : null,
+							closePrice:
+								typeof p.close_price === "number" ? p.close_price : null,
+							contractMultiplier:
+								typeof p.contract_multiplier === "number"
+									? p.contract_multiplier
+									: null,
+						}))
+						.filter((p) => p.instrument.length > 0);
+					this.notifyPortfolioUpdate();
 				}
 			}
 		} catch (error) {
@@ -383,6 +466,15 @@ export class TradenetWebSocket {
 		if (this.connection) {
 			this.connection.send_text(JSON.stringify(["quotes", list]));
 			this.startResendConfirm();
+		}
+	}
+
+	private requestPortfolio(): void {
+		if (!this.isConnectedInstance()) {
+			return;
+		}
+		if (this.connection) {
+			this.connection.send_text(JSON.stringify(["portfolio"]));
 		}
 	}
 
@@ -527,6 +619,16 @@ export class TradenetWebSocket {
 				callback(isConnected);
 			} catch (error) {
 				console.error("[WS] Error in connection state callback:", error);
+			}
+		}
+	}
+
+	private notifyPortfolioUpdate(): void {
+		for (const callback of this.portfolioUpdateCallbacks) {
+			try {
+				callback(this.portfolioTickers.slice());
+			} catch (error) {
+				console.error("[WS] Error in portfolio callback:", error);
 			}
 		}
 	}
