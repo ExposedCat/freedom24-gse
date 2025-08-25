@@ -4,12 +4,16 @@ export function formatTicker(ticker: string): string {
 		: ticker.replaceAll(".US", "");
 }
 
+export function formatPrice(value: number): string {
+	const absoluteValue = Math.abs(value);
+	return absoluteValue >= 1000
+		? `$${Math.round(absoluteValue).toLocaleString()}`
+		: `$${absoluteValue.toFixed(2)}`;
+}
+
 export function formatMoneyChange(value: number): string {
 	const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-	const absoluteValue = Math.abs(value);
-	if (absoluteValue >= 1000)
-		return `${sign}$${Math.round(absoluteValue).toLocaleString()}`;
-	return `${sign}$${absoluteValue.toFixed(2)}`;
+	return `${sign}${formatPrice(value)}`;
 }
 
 export function formatPercentageChange(value: number): string {

@@ -17,6 +17,7 @@ import {
 	formatMoneyChange,
 	formatPercentageChange,
 	formatTimeLeft,
+	formatPrice,
 } from "./utils/format.js";
 
 export default class GnomeShellExtension extends Extension {
@@ -339,7 +340,7 @@ export default class GnomeShellExtension extends Extension {
 		const strike = strikeMatch ? Number(strikeMatch) : 0;
 		const strikeChange = baseTickerPrice - strike;
 		const timeFromNow = formatTimeLeft(new Date(), new Date(position.maturity));
-		const secondLine = `${formatMoneyChange(currentPrice)} · $${baseTickerPrice.toFixed(2)} (${formatMoneyChange(strikeChange)}) · ${timeFromNow}`;
+		const secondLine = `${formatPrice(currentPrice)} · ${formatPrice(baseTickerPrice)} (${formatMoneyChange(strikeChange)}) · ${timeFromNow}`;
 
 		const openOrderLine = "";
 		return `${firstLine}\n${secondLine}${openOrderLine}`;
