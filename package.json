@@ -1,5 +1,5 @@
 {
-	"name": "panel-stocks-gse",
+	"name": "freedom24-gse",
 	"description": "Panel Stocks for GNOME Shell",
 	"version": "1.0.0",
 	"keywords": [],
@@ -21,12 +21,12 @@
 	"type": "module",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/ExposedCat/panel-stocks-gse.git"
+		"url": "git+https://github.com/ExposedCat/freedom24-gse.git"
 	},
 	"bugs": {
-		"url": "https://github.com/ExposedCat/panel-stocks-gse/issues"
+		"url": "https://github.com/ExposedCat/freedom24-gse/issues"
 	},
-	"homepage": "https://github.com/ExposedCat/panel-stocks-gse#readme",
+	"homepage": "https://github.com/ExposedCat/freedom24-gse#readme",
 	"sideEffects": false,
 	"dependencies": {
 		"@biomejs/biome": "^1.9.4",

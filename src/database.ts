@@ -20,7 +20,7 @@ export class TickerDatabase {
 
 	private constructor() {
 		const cacheDir = GLib.get_user_cache_dir();
-		this.dbDir = GLib.build_filenamev([cacheDir, "panel-stocks"]);
+		this.dbDir = GLib.build_filenamev([cacheDir, "freedom24"]);
 
 		GLib.mkdir_with_parents(this.dbDir, 0o755);
 	}
@@ -36,7 +36,7 @@ export class TickerDatabase {
 		try {
 			this.connection = new Gda5.Connection({
 				provider: Gda5.Config.get_provider("SQLite"),
-				cncString: `DB_DIR=${this.dbDir};DB_NAME=panel-stocks`,
+				cncString: `DB_DIR=${this.dbDir};DB_NAME=freedom24`,
 			});
 
 			this.connection.open();

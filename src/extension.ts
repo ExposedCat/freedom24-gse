@@ -75,7 +75,7 @@ export default class GnomeShellExtension extends Extension {
 		this._label = new St.Label({
 			text: "Loading...",
 			y_align: Clutter.ActorAlign.CENTER,
-			style_class: "panel-stocks-label",
+			style_class: "freedom24-label",
 		});
 		this._label.clutter_text.use_markup = true;
 

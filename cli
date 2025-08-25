@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NAME="panel-stocks"
+NAME="freedom24"
 DOMAIN="exposedcat"
 
 SLUG="$NAME@$DOMAIN"

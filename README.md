@@ -7,7 +7,7 @@
 - Clone this repo
 
 ```bash
-git clone git@github.com:ExposedCat/panel-stocks-gse.git && cd panel-stocks-gse
+git clone git@github.com:ExposedCat/freedom24-gse.git && cd freedom24-gse
 ```
 
 - Install dependencies

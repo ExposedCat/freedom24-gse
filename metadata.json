@@ -1,8 +1,8 @@
 {
-	"name": "Panel Stocks",
-	"description": "Panel Stocks for GNOME Shell",
-	"uuid": "panel-stocks@exposedcat",
-	"settings-schema": "org.gnome.shell.extensions.exposedcat.panel-stocks",
+	"name": "Freedom24",
+	"description": "Freedom24 extension for GNOME Shell",
+	"uuid": "freedom24@exposedcat",
+	"settings-schema": "org.gnome.shell.extensions.exposedcat.freedom24",
 	"shell-version": [
 		"47"
 	]
