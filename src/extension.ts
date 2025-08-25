@@ -12,6 +12,12 @@ import {
 	type PortfolioPosition,
 } from "./websocket.js";
 import { TickerDatabase, type PriceTrend } from "./database.js";
+import {
+	formatTicker,
+	formatMoneyChange,
+	formatPercentageChange,
+	formatTimeLeft,
+} from "./utils/format.js";
 
 export default class GnomeShellExtension extends Extension {
 	private _panelButton: PanelMenu.Button | null = null;
@@ -28,9 +34,7 @@ export default class GnomeShellExtension extends Extension {
 	private _isConnected = false;
 	private _reconnectTimeoutId: number | null = null;
 	private _reconnectDebounceMs = 1000;
-	private _persistTimeoutId: number | null = null;
-	private _persistDebounceMs = 3000;
-	private _pendingPersist = new Set<string>();
+
 	private _connectionStateCallback: ((isConnected: boolean) => void) | null =
 		null;
 	private _portfolioUpdateCallback: ((tickers: string[]) => void) | null = null;
@@ -116,11 +120,6 @@ export default class GnomeShellExtension extends Extension {
 		if (this._reconnectTimeoutId) {
 			GLib.source_remove(this._reconnectTimeoutId);
 			this._reconnectTimeoutId = null;
-		}
-
-		if (this._persistTimeoutId) {
-			GLib.source_remove(this._persistTimeoutId);
-			this._persistTimeoutId = null;
 		}
 
 		if (this._connectionStateCallback) {
@@ -247,40 +246,6 @@ export default class GnomeShellExtension extends Extension {
 		this._updateDisplay();
 	}
 
-	private _schedulePersist() {
-		if (this._persistTimeoutId) {
-			GLib.source_remove(this._persistTimeoutId);
-		}
-		this._persistTimeoutId = GLib.timeout_add(
-			GLib.PRIORITY_DEFAULT,
-			this._persistDebounceMs,
-			() => {
-				this._flushPersist();
-				this._persistTimeoutId = null;
-				return GLib.SOURCE_REMOVE;
-			},
-		);
-	}
-
-	private async _flushPersist() {
-		const tickersToSave = Array.from(this._pendingPersist);
-		this._pendingPersist.clear();
-		for (const symbol of tickersToSave) {
-			const data = this._tickerPrices.get(symbol);
-			if (!data) continue;
-
-			TickerDatabase.savePrice(symbol, data.price, true).catch((error) => {
-				console.error(`[Extension] Failed to persist ${symbol}:`, error);
-			});
-		}
-	}
-
-	private formatTicker(ticker: string) {
-		return ticker.startsWith("+")
-			? ticker.split(".")[0]
-			: ticker.replaceAll(".US", "");
-	}
-
 	private _updateDisplay() {
 		if (!this._settings || !this._label) return;
 
@@ -323,7 +288,7 @@ export default class GnomeShellExtension extends Extension {
 				} else if (stock.trend === "down") {
 					priceColor = "#f66151";
 				}
-				const displaySymbol = this.formatTicker(stock.symbol);
+				const displaySymbol = formatTicker(stock.symbol);
 				return `<span foreground="white">${displaySymbol}</span> <span foreground="${priceColor}">$${stock.price.toFixed(2)}</span>`;
 			})
 			.join(" · ");
@@ -350,43 +315,6 @@ export default class GnomeShellExtension extends Extension {
 		}
 	}
 
-	private _formatMoneyChange(value: number): string {
-		const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-		const abs = Math.abs(value);
-		if (abs >= 1000) return `${sign}$${Math.round(abs).toLocaleString()}`;
-		return `${sign}$${abs.toFixed(2)}`;
-	}
-
-	private _formatPercentageChange(value: number): string {
-		const sign = value > 0 ? "+" : value < 0 ? "-" : "";
-		const abs = Math.abs(value);
-		return `${sign}${abs.toFixed(1)}%`;
-	}
-
-	private _formatTimeLeft(start: Date, end: Date): string {
-		let diff = end.getTime() - start.getTime();
-		if (diff <= 0) return "now";
-		const units = [
-			{ label: "y", ms: 1000 * 60 * 60 * 24 * 365 },
-			{ label: "m", ms: 1000 * 60 * 60 * 24 * 30 },
-			{ label: "d", ms: 1000 * 60 * 60 * 24 },
-			{ label: "h", ms: 1000 * 60 * 60 },
-			{ label: "m", ms: 1000 * 60 },
-		];
-		const result: string[] = [];
-		let used = 0;
-		for (const unit of units) {
-			if (used >= 2) break;
-			const value = Math.floor(diff / unit.ms);
-			if (value > 0) {
-				result.push(`${value}${unit.label}`);
-				diff -= value * unit.ms;
-				used++;
-			}
-		}
-		return result.length > 0 ? result.join(" ") : "now";
-	}
-
 	private _formatPosition(position: PortfolioPosition): string {
 		const base = (position.baseContractCode || position.instrument).replace(
 			/\.US$/,
@@ -404,17 +332,14 @@ export default class GnomeShellExtension extends Extension {
 		const profit = currentPrice - startPrice;
 		const percent = startPrice !== 0 ? (profit / startPrice) * 100 : 0;
 		const stateIcon = profit > 0 ? "🟢" : profit < 0 ? "🔴" : "⚪";
-		const firstLine = `${stateIcon} ${base} ${this._formatMoneyChange(profit)} ${this._formatPercentageChange(percent)}`;
+		const firstLine = `${stateIcon} ${base} ${formatMoneyChange(profit)} ${formatPercentageChange(percent)}`;
 
 		const baseTickerPrice = marketOrClose;
 		const strikeMatch = position.instrument.split("C").at(-1);
 		const strike = strikeMatch ? Number(strikeMatch) : 0;
 		const strikeChange = baseTickerPrice - strike;
-		const timeFromNow = this._formatTimeLeft(
-			new Date(),
-			new Date(position.maturity),
-		);
-		const secondLine = `${this._formatMoneyChange(currentPrice)} · $${baseTickerPrice.toFixed(2)} (${this._formatMoneyChange(strikeChange)}) · ${timeFromNow}`;
+		const timeFromNow = formatTimeLeft(new Date(), new Date(position.maturity));
+		const secondLine = `${formatMoneyChange(currentPrice)} · $${baseTickerPrice.toFixed(2)} (${formatMoneyChange(strikeChange)}) · ${timeFromNow}`;
 
 		const openOrderLine = "";
 		return `${firstLine}\n${secondLine}${openOrderLine}`;
