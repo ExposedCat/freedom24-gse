@@ -82,7 +82,7 @@ export default class PreferencesManager extends ExtensionPreferences {
 		const addTicker = () => {
 			const raw = entryRow.text;
 			const ticker = this.toTicker(raw);
-			if (!ticker || !this.isValidTicker(ticker)) {
+			if (!ticker) {
 				entryRow.add_css_class("error");
 				return;
 			}
@@ -120,12 +120,6 @@ export default class PreferencesManager extends ExtensionPreferences {
 
 	private toTicker(value: string): string {
 		return value.trim().toUpperCase();
-	}
-
-	private isValidTicker(value: string): boolean {
-		return (
-			/^[A-Z0-9.-]+$/.test(value) && value.length >= 1 && value.length <= 10
-		);
 	}
 
 	private getTickers(settings: Gio.Settings): string[] {
