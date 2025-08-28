@@ -1,6 +1,6 @@
 import GLib from "gi://GLib";
 import Soup from "gi://Soup";
-import { TickerDatabase, type PriceTrend } from "./database.js";
+import { type PriceTrend, TickerDatabase } from "./database.js";
 
 type PriceUpdateCallback = (ticker: string, price: number) => void;
 type PortfolioUpdateCallback = (tickers: string[]) => void;
@@ -373,22 +373,21 @@ export class TradenetWebSocket {
 						this.notifyConnectionState(true);
 					}
 					const quotePayload = payload as QuotePayload;
-					const hasBbp =
-						typeof quotePayload.bbp === "number" && quotePayload.bbp > 0;
-					const hasLtp = typeof quotePayload.ltp === "number";
 
-					if (quotePayload.c && (hasBbp || hasLtp)) {
+					if (quotePayload.c) {
 						const ticker = quotePayload.c;
 						const isOption = ticker.startsWith("+");
 						const multiplier = isOption
 							? (quotePayload.contract_multiplier ?? 100)
 							: 1;
 
-						const selectedRawPrice = hasBbp
-							? (quotePayload.bbp as number)
-							: hasLtp && getMarketState() === "open"
-								? (quotePayload.ltp as number)
-								: null;
+						const selectedRawPrice =
+							(getMarketState() === "open"
+								? quotePayload.bbp
+								: quotePayload.ltp) || null;
+
+						console.log(quotePayload.c, quotePayload.bbp, quotePayload.ltp);
+
 						if (selectedRawPrice === null) {
 							return;
 						}
@@ -478,11 +477,6 @@ export class TradenetWebSocket {
 		}
 	}
 
-	private setDesiredSubscriptionsAndSend(newSubscriptions: Set<string>): void {
-		this.desiredSubscriptions = newSubscriptions;
-		this.sendQuotes(this.desiredSubscriptions);
-	}
-
 	private scheduleReconnection(): void {
 		if (this.reconnectAttempts >= this.maxReconnectAttempts) {
 			return;
@@ -515,9 +509,8 @@ export class TradenetWebSocket {
 		this.clearPeriodicResubscribe();
 		this.periodicResubscribeTimeoutId = GLib.timeout_add(
 			GLib.PRIORITY_DEFAULT,
-			7 * 1000,
+			30 * 1000,
 			() => {
-				console.log("[WS] resubscribing");
 				this.sendQuotes(this.desiredSubscriptions);
 				return GLib.SOURCE_CONTINUE;
 			},
@@ -532,7 +525,6 @@ export class TradenetWebSocket {
 	}
 
 	private startResendConfirm(): void {
-		console.log("[WS] startResendConfirm");
 		this.clearResendConfirm();
 		this.waitingForResendResponse = true;
 		this.resendConfirmTimeoutId = GLib.timeout_add(
@@ -540,10 +532,7 @@ export class TradenetWebSocket {
 			2 * 1000,
 			() => {
 				if (this.waitingForResendResponse) {
-					console.log("[WS] force reconnect");
 					this.forceReconnectNow();
-				} else {
-					console.log("[WS] got response no reconnect");
 				}
 				this.resendConfirmTimeoutId = null;
 				return GLib.SOURCE_REMOVE;
